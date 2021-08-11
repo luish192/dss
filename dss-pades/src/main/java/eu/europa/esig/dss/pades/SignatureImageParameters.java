@@ -20,10 +20,7 @@
  */
 package eu.europa.esig.dss.pades;
 
-import eu.europa.esig.dss.enumerations.ImageScaling;
-import eu.europa.esig.dss.enumerations.VisualSignatureAlignmentHorizontal;
-import eu.europa.esig.dss.enumerations.VisualSignatureAlignmentVertical;
-import eu.europa.esig.dss.enumerations.VisualSignatureRotation;
+import eu.europa.esig.dss.enumerations.*;
 import eu.europa.esig.dss.model.DSSDocument;
 import eu.europa.esig.dss.pdf.visible.DPIUtils;
 
@@ -283,6 +280,19 @@ public class SignatureImageParameters implements Serializable {
 	 */
 	public void setRotation(VisualSignatureRotation rotation) {
 		this.rotation = rotation;
+	}
+
+	/**
+	 * On which pages should the signature be placed
+	 */
+	private VisualSignaturePlacement pagePlacement = VisualSignaturePlacement.SINGLE_PAGE;
+
+	public VisualSignaturePlacement getPagePlacement() {
+		return pagePlacement;
+	}
+
+	public void setPagePlacement(VisualSignaturePlacement pagePlacement) {
+		this.pagePlacement = pagePlacement;
 	}
 
 	/**
