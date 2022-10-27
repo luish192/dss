@@ -534,7 +534,7 @@ public abstract class AbstractPDFSignatureService implements PDFSignatureService
 			AnnotationBox pageBox = documentReader.getPageBox(fieldParameters.getPage());
 			signatureFieldAnnotation = signatureFieldAnnotation.toPdfPageCoordinates(pageBox.getHeight());
 
-			checkSignatureFieldBoxOverlap(documentReader, signatureFieldAnnotation, fieldParameters.getPage());
+			//checkSignatureFieldBoxOverlap(documentReader, signatureFieldAnnotation, fieldParameters.getPage());
 		}
 	}
 
@@ -575,7 +575,7 @@ public abstract class AbstractPDFSignatureService implements PDFSignatureService
 		AnnotationBox pageBox = reader.getPageBox(parameters.getPage());
 		annotationBox = annotationBox.toPdfPageCoordinates(pageBox.getHeight());
 
-		checkSignatureFieldBoxOverlap(reader, annotationBox, parameters.getPage());
+		//checkSignatureFieldBoxOverlap(reader, annotationBox, parameters.getPage());
 
 		return annotationBox;
 	}
