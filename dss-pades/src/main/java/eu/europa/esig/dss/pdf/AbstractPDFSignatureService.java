@@ -66,6 +66,10 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 
 /**
@@ -196,73 +200,86 @@ public abstract class AbstractPDFSignatureService implements PDFSignatureService
 		try (PdfDocumentReader reader = loadPdfDocumentReader(document, pwd)) {
 
 			final PdfDssDict dssDictionary = reader.getDSSDictionary();
-			PdfDssDict lastDSSDictionary = dssDictionary; // defined the last created DSS dictionary
+			AtomicReference<PdfDssDict> lastDSSDictionary = new AtomicReference<>(dssDictionary); // defined the last created DSS dictionary
 
 			Map<PdfSignatureDictionary, List<String>> sigDictionaries = reader.extractSigDictionaries();
 			sigDictionaries = sortSignatureDictionaries(sigDictionaries); // sort from the latest revision to the first
 
+			// Crea un ExecutorService para manejar el procesamiento paralelo
+			ExecutorService executor = Executors.newFixedThreadPool(10); // 10 hilos (puedes ajustar este número)
+
+			List<Future<?>> futureList = new ArrayList<>();
+
 			for (Map.Entry<PdfSignatureDictionary, List<String>> sigDictEntry : sigDictionaries.entrySet()) {
-				PdfSignatureDictionary signatureDictionary = sigDictEntry.getKey();
-				List<String> fieldNames = sigDictEntry.getValue();
-				try {
-					LOG.info("Signature field name: {}", fieldNames);
+				final PdfSignatureDictionary signatureDictionary = sigDictEntry.getKey();
+				final List<String> fieldNames = sigDictEntry.getValue();
 
-					final ByteRange byteRange = signatureDictionary.getByteRange();
-					byteRange.validate();
+				// Procesar cada firma en un hilo separado
+				Future<?> future = executor.submit(() -> {
+					try {
+						LOG.info("Signature field name: {}", fieldNames);
 
-					final byte[] cms = signatureDictionary.getContents();
-					byte[] revisionContent = DSSUtils.EMPTY_BYTE_ARRAY;
-					if (!isContentValueEqualsByteRangeExtraction(document, byteRange, cms, fieldNames)) {
-						LOG.warn("Signature {} is invalid. SIWA detected !", fieldNames);
-					} else {
-						revisionContent = PAdESUtils.getRevisionContent(document, byteRange);
+						final ByteRange byteRange = signatureDictionary.getByteRange();
+						byteRange.validate();
+
+						final byte[] cms = signatureDictionary.getContents();
+						byte[] revisionContent = DSSUtils.EMPTY_BYTE_ARRAY;
+						if (!isContentValueEqualsByteRangeExtraction(document, byteRange, cms, fieldNames)) {
+							LOG.warn("Signature {} is invalid. SIWA detected!", fieldNames);
+						} else {
+							revisionContent = PAdESUtils.getRevisionContent(document, byteRange);
+						}
+
+						boolean signatureCoversWholeDocument = reader.isSignatureCoversWholeDocument(signatureDictionary);
+						byte[] signedData = PAdESUtils.getSignedContentFromRevision(revisionContent, byteRange);
+						DSSDocument signedContent = new InMemoryDocument(signedData);
+
+						// Crea una revisión DSS si se actualiza
+						lastDSSDictionary.set(getPreviousDssDictAndUpdateIfNeeded(revisions, lastDSSDictionary.get(),
+								revisionContent, pwd));
+
+						PdfCMSRevision newRevision = null;
+						if (isDocTimestamp(signatureDictionary)) {
+							newRevision = new PdfDocTimestampRevision(signatureDictionary, fieldNames, signedContent,
+									signatureCoversWholeDocument);
+						} else if (isSignature(signatureDictionary)) {
+							newRevision = new PdfSignatureRevision(signatureDictionary, dssDictionary, fieldNames,
+									signedContent, signatureCoversWholeDocument);
+						} else {
+							LOG.warn("La entrada {} se omitió. ¡Una entrada de diccionario de firma con un tipo '{}' " +
+											"y subfiltro '{}' no es aceptable!", fieldNames,
+									signatureDictionary.getType(), signatureDictionary.getSubFilter());
+						}
+
+						// Agrega la revisión de firma/timestamp
+						if (newRevision != null) {
+							synchronized (revisions) {
+								revisions.add(newRevision); // Aseguramos acceso sincronizado
+							}
+						}
+
+						lastDSSDictionary.set(getPreviousDssDictAndUpdateIfNeeded(revisions, lastDSSDictionary.get(),
+								extractBeforeSignatureValue(byteRange, revisionContent), pwd));
+
+					} catch (Exception e) {
+						String errorMessage = "Unable to parse signature {}. Reason: {}";
+						if (LOG.isDebugEnabled()) {
+							LOG.error(errorMessage, fieldNames, e.getMessage(), e);
+						} else {
+							LOG.error(errorMessage, fieldNames, e.getMessage());
+						}
 					}
+				});
 
-					boolean signatureCoversWholeDocument = reader.isSignatureCoversWholeDocument(signatureDictionary);
-					byte[] signedData = PAdESUtils.getSignedContentFromRevision(revisionContent, byteRange);
-					DSSDocument signedContent = new InMemoryDocument(signedData);
-
-					// create a DSS revision if updated
-					lastDSSDictionary = getPreviousDssDictAndUpdateIfNeeded(revisions, lastDSSDictionary,
-							revisionContent, pwd);
-
-					PdfCMSRevision newRevision = null;
-					if (isDocTimestamp(signatureDictionary)) {
-						newRevision = new PdfDocTimestampRevision(signatureDictionary, fieldNames, signedContent,
-								signatureCoversWholeDocument);
-
-					} else if (isSignature(signatureDictionary)) {
-						// signature contains all dss dictionaries present after
-						newRevision = new PdfSignatureRevision(signatureDictionary, dssDictionary, fieldNames,
-								signedContent, signatureCoversWholeDocument);
-
-					} else {
-						LOG.warn("The entry {} is skipped. A signature dictionary entry with a type '{}' " +
-										"and subFilter '{}' is not acceptable configuration!", fieldNames,
-								signatureDictionary.getType(), signatureDictionary.getSubFilter());
-
-					}
-
-					// add signature/timestamp revision
-					if (newRevision != null) {
-						revisions.add(newRevision);
-					}
-
-					// checks if there is a previous update of the DSS dictionary and creates a new revision if needed
-					lastDSSDictionary = getPreviousDssDictAndUpdateIfNeeded(revisions, lastDSSDictionary,
-							extractBeforeSignatureValue(byteRange, revisionContent), pwd);
-
-
-				} catch (Exception e) {
-					String errorMessage = "Unable to parse signature {} . Reason : {}";
-					if (LOG.isDebugEnabled()) {
-						LOG.error(errorMessage, fieldNames, e.getMessage(), e);
-					} else {
-						LOG.error(errorMessage, fieldNames, e.getMessage());
-					}
-
-				}
+				futureList.add(future);
 			}
+
+			// Esperar a que todas las tareas terminen
+			for (Future<?> future : futureList) {
+				future.get();  // Esto garantiza que esperes la finalización de cada tarea.
+			}
+
+			executor.shutdown(); // Finaliza el ExecutorService
 
 		} catch (IOException e) {
 			throw new DSSException(String.format(
@@ -595,23 +612,70 @@ public abstract class AbstractPDFSignatureService implements PDFSignatureService
 		String alertMessage = "The new signature field position overlaps with an existing annotation!";
 		alertOnSignatureFieldOverlap.alert(new Status(alertMessage));
 	}
+	Map<ByteRange, byte[]> revisionContentCache = new HashMap<>();
 
 	@Override
 	public void analyzePdfModifications(DSSDocument document, List<AdvancedSignature> signatures, String pwd) {
+		ExecutorService executor = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors());
+		List<Future<?>> futures = new ArrayList<>();
+
 		try (PdfDocumentReader finalRevisionReader = loadPdfDocumentReader(document, pwd)) {
 			for (AdvancedSignature signature : signatures) {
-				PAdESSignature padesSignature = (PAdESSignature) signature;
-				PdfSignatureRevision pdfRevision = padesSignature.getPdfRevision();
-				byte[] revisionContent = PAdESUtils.getRevisionContent(document, pdfRevision.getByteRange());
-				pdfRevision.setModificationDetection(getModificationDetection(finalRevisionReader, new InMemoryDocument(revisionContent), pdfRevision, pwd));
+				Future<?> future = executor.submit(() -> {
+					try {
+						PAdESSignature padesSignature = (PAdESSignature) signature;
+						PdfSignatureRevision pdfRevision = padesSignature.getPdfRevision();
+						byte[] revisionContent;
+						ByteRange byteRange = pdfRevision.getByteRange();
+
+						// Usar caché para evitar la recalculación del contenido de la revisión
+						synchronized (revisionContentCache) {
+							revisionContent = revisionContentCache.computeIfAbsent(byteRange, br ->
+                                    {
+                                        try {
+                                            return PAdESUtils.getRevisionContent(document, br);
+                                        } catch (IOException e) {
+											String errorMessage = "Error processing signature. Reason : {}";
+											if (LOG.isDebugEnabled()) {
+												LOG.error(errorMessage, e.getMessage(), e);
+											} else {
+												LOG.error(errorMessage, e.getMessage());
+											}
+											return DSSUtils.EMPTY_BYTE_ARRAY;  // O algún valor predeterminado
+                                        }
+                                    }
+							);
+						}
+
+						pdfRevision.setModificationDetection(
+								getModificationDetection(finalRevisionReader, new InMemoryDocument(revisionContent), pdfRevision, pwd)
+						);
+					} catch (Exception e) {
+						String errorMessage = "Error processing signature. Reason : {}";
+						if (LOG.isDebugEnabled()) {
+							LOG.error(errorMessage, e.getMessage(), e);
+						} else {
+							LOG.error(errorMessage, e.getMessage());
+						}
+					}
+				});
+				futures.add(future);
 			}
-		} catch (IOException e) {
+
+			// Esperar a que todas las tareas terminen
+			for (Future<?> future : futures) {
+				future.get();
+			}
+
+		} catch (Exception e) {
 			String errorMessage = "Unable to proceed PDF modification detection. Reason : {}";
 			if (LOG.isDebugEnabled()) {
 				LOG.error(errorMessage, e.getMessage(), e);
 			} else {
 				LOG.error(errorMessage, e.getMessage());
 			}
+		} finally {
+			executor.shutdown();
 		}
 	}
 

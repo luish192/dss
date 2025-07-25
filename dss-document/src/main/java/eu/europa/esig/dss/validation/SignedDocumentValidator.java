@@ -764,9 +764,7 @@ public abstract class SignedDocumentValidator implements DocumentValidator {
 	 */
 	@Override
 	public <T extends AdvancedSignature> void findSignatureScopes(Collection<T> allSignatures) {
-		for (final AdvancedSignature signature : allSignatures) {
-			signature.findSignatureScope(signatureScopeFinder);
-		}
+		allSignatures.parallelStream().forEach(signature -> signature.findSignatureScope(signatureScopeFinder));
 	}
 
 	/**

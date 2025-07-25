@@ -28,9 +28,12 @@ import org.slf4j.LoggerFactory;
 
 import java.awt.image.BufferedImage;
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
+import java.util.concurrent.*;
 
 /**
  * The class contains utils for modification detection
@@ -104,28 +107,46 @@ public class PdfModificationDetectionUtils {
 	 */
 	public static List<PdfModification> getVisualDifferences(final PdfDocumentReader signedRevisionReader,
 			PdfDocumentReader finalRevisionReader) throws IOException {
-		List<PdfModification> visualDifferences = new ArrayList<>();
 
-		for (int pageNumber = 1; pageNumber <= signedRevisionReader.getNumberOfPages()
-				&& pageNumber <= finalRevisionReader.getNumberOfPages(); pageNumber++) {
+		List<PdfModification> visualDifferences = Collections.synchronizedList(new ArrayList<>());
 
-			BufferedImage signedScreenshot = signedRevisionReader.generateImageScreenshot(pageNumber);
+		int numPages = Math.min(signedRevisionReader.getNumberOfPages(), finalRevisionReader.getNumberOfPages());
+		ExecutorService executorService = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors());
 
-			List<PdfAnnotation> signedAnnotations = signedRevisionReader.getPdfAnnotations(pageNumber);
-			List<PdfAnnotation> finalAnnotations = finalRevisionReader.getPdfAnnotations(pageNumber);
+		List<Future<Void>> futures = new ArrayList<>();
+		for (int pageNumber = 1; pageNumber <= numPages; pageNumber++) {
+			final int page = pageNumber;
 
-			List<PdfAnnotation> addedAnnotations = getUpdatedAnnotations(signedAnnotations, finalAnnotations);
-			BufferedImage finalScreenshot = finalRevisionReader.generateImageScreenshotWithoutAnnotations(pageNumber,
-					addedAnnotations);
+			futures.add(executorService.submit(() -> {
+				try {
+					BufferedImage signedScreenshot = signedRevisionReader.generateImageScreenshot(page);
 
-			if (!ImageUtils.imagesEqual(signedScreenshot, finalScreenshot)) {
-				LOG.warn("A visual difference found on page {} between a signed revision and the final document!",
-						pageNumber);
-				visualDifferences.add(new PdfModificationImpl(pageNumber));
-			}
+					List<PdfAnnotation> signedAnnotations = signedRevisionReader.getPdfAnnotations(page);
+					List<PdfAnnotation> finalAnnotations = finalRevisionReader.getPdfAnnotations(page);
 
+					List<PdfAnnotation> addedAnnotations = getUpdatedAnnotations(signedAnnotations, finalAnnotations);
+					BufferedImage finalScreenshot = finalRevisionReader.generateImageScreenshotWithoutAnnotations(page, addedAnnotations);
+
+					if (!ImageUtils.imagesEqual(signedScreenshot, finalScreenshot)) {
+						LOG.warn("A visual difference found on page {} between a signed revision and the final document!", page);
+						visualDifferences.add(new PdfModificationImpl(page));
+					}
+				} catch (IOException e) {
+					throw new UncheckedIOException(e);
+				}
+				return null;
+			}));
 		}
 
+		for (Future<Void> future : futures) {
+			try {
+				future.get();
+			} catch (InterruptedException | ExecutionException | CancellationException e) {
+				throw new IOException(e.getMessage());
+			}
+		}
+
+		executorService.shutdown();
 		return visualDifferences;
 	}
 

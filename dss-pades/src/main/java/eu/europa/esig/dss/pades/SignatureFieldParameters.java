@@ -21,6 +21,8 @@
 package eu.europa.esig.dss.pades;
 
 import java.io.Serializable;
+import java.util.Collections;
+import java.util.List;
 
 import eu.europa.esig.dss.pdf.visible.ImageUtils;
 
@@ -48,6 +50,22 @@ public class SignatureFieldParameters implements Serializable {
 
 	/** Signature field height */
 	private float height;
+
+	/**
+	 * Page ranges where the signature field should be placed
+	 * <p>
+	 * The page ranges are defined as a list of integer arrays, where each array contains two integers:
+	 * the first integer is the start page and the second integer is the end page (inclusive).
+	 * </p>
+	 */
+	private List<int[]> pageRanges = Collections.emptyList();
+
+	public List<int[]> getPageRanges() {
+		return pageRanges;
+	}
+	public void setPageRanges(List<int[]> pageRanges) {
+		this.pageRanges = pageRanges != null ? pageRanges : Collections.emptyList();
+	}
 
 	/**
 	 * Gets signature field id

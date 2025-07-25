@@ -192,13 +192,10 @@ public class PdfBoxSignatureService extends AbstractPDFSignatureService {
 
     private byte[] signDocumentAndReturnDigest(final PAdESCommonParameters parameters, final byte[] signatureBytes,
                                                final OutputStream fileOutputStream, final PDDocument pdDocument) {
-
         final MessageDigest digest = DSSUtils.getMessageDigest(parameters.getDigestAlgorithm());
         SignatureInterface signatureInterface = new SignatureInterface() {
-
             @Override
             public byte[] sign(InputStream content) throws IOException {
-
                 byte[] b = new byte[4096];
                 int count;
                 while ((count = content.read(b)) > 0) {
@@ -208,61 +205,71 @@ public class PdfBoxSignatureService extends AbstractPDFSignatureService {
             }
         };
 
-        SignatureFieldParameters fieldParameters = parameters.getImageParameters().getFieldParameters();
+        SignatureFieldParameters fp = parameters.getImageParameters().getFieldParameters();
         final PDSignature pdSignature = createSignatureDictionary(pdDocument, parameters);
-        final PDSignatureField pdSignatureField = findExistingSignatureField(pdDocument, fieldParameters);
-        if (pdSignatureField != null) {
-            setSignatureToField(pdSignatureField, pdSignature);
+        final PDSignatureField existingField = findExistingSignatureField(pdDocument, fp);
+        if (existingField != null) {
+            setSignatureToField(existingField, pdSignature);
         }
 
         try (SignatureOptions options = new SignatureOptions()) {
             options.setPreferredSignatureSize(parameters.getContentSize());
 
-            SignatureImageParameters imageParameters = parameters.getImageParameters();
-            if (!imageParameters.isEmpty()) {
-                PdfBoxSignatureDrawer signatureDrawer = (PdfBoxSignatureDrawer) loadSignatureDrawer(imageParameters);
-                signatureDrawer.init(imageParameters, pdDocument, options);
-
-                if (pdSignatureField == null) {
-                    // check signature field position only for new annotations
-                    checkVisibleSignatureFieldBoxPosition(signatureDrawer, new PdfBoxDocumentReader(pdDocument), fieldParameters);
+            SignatureImageParameters imageParams = parameters.getImageParameters();
+            if (!imageParams.isEmpty()) {
+                PdfBoxSignatureDrawer drawer = (PdfBoxSignatureDrawer) loadSignatureDrawer(imageParams);
+                drawer.init(imageParams, pdDocument, options);
+                if (existingField == null) {
+                    checkVisibleSignatureFieldBoxPosition(drawer, new PdfBoxDocumentReader(pdDocument), fp);
                 } else {
-                    signatureDrawer.setSignatureField(pdSignatureField);
+                    drawer.setSignatureField(existingField);
                 }
-
-                signatureDrawer.draw();
+                drawer.draw();
             }
 
             pdDocument.addSignature(pdSignature, signatureInterface, options);
 
             if (placeSignatureOnPage(parameters.getImageParameters())) {
-                PDPage signaturePage = pdDocument.getPages().get(options.getPage());
-                List<PDAnnotation> signaturePageAnnotations = signaturePage.getAnnotations();
-                PDAnnotation signatureAnnotation = signaturePageAnnotations.get(signaturePageAnnotations.size() - 1);
-                for (PDPage page : pdDocument.getPages()) {
-                    // reset existing annotations (needed in order to have the stamps added)
-                    if (!page.equals(signaturePage)) {
-                        page.getAnnotations().add(signatureAnnotation);
-                        COSDictionary pageTreeNode = page.getCOSObject();
-                        do {
-                            pageTreeNode.setNeedToBeUpdated(true);
-                        } while ((pageTreeNode = (COSDictionary) pageTreeNode.getDictionaryObject("Parent")) != null);
+                PDPage sigPage = pdDocument.getPages().get(options.getPage());
+                List<PDAnnotation> anns = sigPage.getAnnotations();
+                PDAnnotation sigAnn = anns.get(anns.size() - 1);
+
+                List<int[]> ranges = fp.getPageRanges();
+                if (ranges.isEmpty()) {
+                    for (PDPage page : pdDocument.getPages()) {
+                        if (!page.equals(sigPage)) {
+                            page.getAnnotations().add(sigAnn);
+                            markForUpdate(page);
+                        }
+                    }
+                } else {
+                    for (int[] r : ranges) {
+                        for (int i = r[0]; i <= r[1]; i++) {
+                            int idx = i - 1;
+                            if (idx == options.getPage()) continue;
+                            PDPage page = pdDocument.getPages().get(idx);
+                            page.getAnnotations().add(sigAnn);
+                            markForUpdate(page);
+                        }
                     }
                 }
             }
 
-            // the document needs to have an ID, if not the current system time is used,
-            // and then the digest of the signed data will be different
             if (pdDocument.getDocumentId() == null) {
                 pdDocument.setDocumentId(parameters.getSigningDate().getTime());
             }
             checkEncryptedAndSaveIncrementally(pdDocument, fileOutputStream, parameters);
-
             return digest.digest();
 
         } catch (IOException e) {
             throw new DSSException(String.format("Unable to compute digest for a PDF : %s", e.getMessage()), e);
         }
+    }
+    private void markForUpdate(PDPage page) {
+        COSDictionary dict = page.getCOSObject();
+        do {
+            dict.setNeedToBeUpdated(true);
+        } while ((dict = (COSDictionary) dict.getDictionaryObject("Parent")) != null);
     }
 
     private PDSignatureField findExistingSignatureField(final PDDocument pdDocument, final SignatureFieldParameters fieldParameters) {

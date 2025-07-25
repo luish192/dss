@@ -26,6 +26,8 @@ import eu.europa.esig.dss.pdf.visible.DPIUtils;
 
 import java.awt.Color;
 import java.io.Serializable;
+import java.util.Collections;
+import java.util.List;
 import java.util.Objects;
 
 /**
@@ -363,6 +365,33 @@ public class SignatureImageParameters implements Serializable {
 				+ ", backgroundColor=" + backgroundColor + ", dpi=" + dpi + ", rotation=" + rotation
 				+ ", alignmentHorizontal=" + alignmentHorizontal + ", alignmentVertical=" + alignmentVertical
 				+ ", fieldParameters=" + getFieldParameters() + ", textParameters=" + getTextParameters() + "]";
+	}
+
+	/**
+	 * A list of signature fields parameters.
+	 * If this list is empty, the single field parameters will be used for retro-compatibility.
+	 */
+	private List<SignatureFieldParameters> fieldParametersList = Collections.emptyList();
+
+	/**
+	 * Returns a list of signature fields parameters.
+	 * If this list is empty, the single field parameters will be used for retro-compatibility.
+	 *
+	 * @return {@link List} of {@link SignatureFieldParameters}
+	 */
+	public List<SignatureFieldParameters> getFieldParametersList() {
+		return fieldParametersList;
+	}
+	/**
+	 * Sets a list of signature fields parameters.
+	 * If this list is empty, the single field parameters will be used for retro-compatibility.
+	 *
+	 * @param fieldParametersList {@link List} of {@link SignatureFieldParameters}
+	 */
+	public void setFieldParametersList(List<SignatureFieldParameters> fieldParametersList) {
+		this.fieldParametersList = fieldParametersList != null
+				? fieldParametersList
+				: Collections.emptyList();
 	}
 	
 }
